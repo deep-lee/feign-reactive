@@ -2,10 +2,12 @@ package reactivefeign.cloud2;
 
 import feign.RetryableException;
 import org.junit.BeforeClass;
+import org.springframework.cloud.client.DefaultServiceInstance;
 import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.discovery.simple.SimpleDiscoveryProperties;
 import org.springframework.cloud.client.loadbalancer.reactive.ReactiveLoadBalancer;
 import org.springframework.cloud.loadbalancer.core.RoundRobinLoadBalancer;
+import org.springframework.cloud.loadbalancer.support.LoadBalancerClientFactory;
 import org.springframework.cloud.loadbalancer.support.ServiceInstanceListSuppliers;
 import org.springframework.cloud.loadbalancer.support.SimpleObjectProvider;
 import reactivefeign.ReactiveFeignBuilder;
@@ -25,18 +27,39 @@ public class LoadBalancingReactiveHttpClientTest extends AbstractLoadBalancingRe
 
     private static ReactiveLoadBalancer.Factory<ServiceInstance> loadBalancerFactory;
 
+    static class CustomLoadBalanceClientFactory extends LoadBalancerClientFactory {
+
+        int[] ports;
+        String serviceName;
+
+        public CustomLoadBalanceClientFactory(int[] ports, String serviceName) {
+            this.ports = ports;
+            this.serviceName = serviceName;
+        }
+
+        @Override
+        public ReactiveLoadBalancer<ServiceInstance> getInstance(String serviceId) {
+            return new RoundRobinLoadBalancer(
+                    new SimpleObjectProvider<>(ServiceInstanceListSuppliers.from(serviceName,
+                            IntStream.of(ports).mapToObj(port ->
+                                    {
+                                        DefaultServiceInstance serviceInstance = new DefaultServiceInstance();
+                                        serviceInstance.setUri(URI.create("http://localhost:" + port));
+                                        return serviceInstance;
+                                    }
+                            )
+                                    .toArray(ServiceInstance[]::new))),
+                    serviceName);
+        }
+    }
+
     @BeforeClass
     public static void setupServersList() {
         loadBalancerFactory = loadBalancerFactory(serviceName, server1.port(), server2.port());
     }
 
     static ReactiveLoadBalancer.Factory<ServiceInstance> loadBalancerFactory(String serviceName, int... ports) {
-        return serviceId -> new RoundRobinLoadBalancer(
-                new SimpleObjectProvider<>(ServiceInstanceListSuppliers.from(serviceName,
-                        IntStream.of(ports).mapToObj(port ->
-                                new SimpleDiscoveryProperties.SimpleServiceInstance(URI.create("http://localhost:"+port)))
-                                .toArray(ServiceInstance[]::new))),
-                serviceName);
+        return new CustomLoadBalanceClientFactory(ports, serviceName);
     }
 
     @Override
